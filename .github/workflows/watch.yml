@@ -1,0 +1,76 @@
+name: Watch
+
+# Runs the watcher on a schedule. When a new item appears it sends an alert
+# and commits the updated seen.json back to the repo so it remembers.
+# When nothing is new, nothing is sent.
+
+on:
+  schedule:
+    # Every 5 minutes. GitHub's smallest cron interval is 5 min, and under
+    # load it may run a little late — fine for this purpose.
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}   # lets you trigger a run by hand from the Actions tab
+
+# Allow the job to push the updated state file back, and to keep itself enabled.
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run watcher
+        env:
+          WATCH_URL: ${{ secrets.WATCH_URL }}
+          WATCH_PAGE_URL: ${{ secrets.WATCH_PAGE_URL }}
+          ALERT_SUBJECT: ${{ secrets.ALERT_SUBJECT }}
+          NOTIFY_BACKEND: ${{ secrets.NOTIFY_BACKEND }}
+          # --- Email (Gmail/SMTP) ---
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          # --- CallMeBot (free WhatsApp, personal) ---
+          CALLMEBOT_PHONE: ${{ secrets.CALLMEBOT_PHONE }}
+          CALLMEBOT_APIKEY: ${{ secrets.CALLMEBOT_APIKEY }}
+          # --- Twilio (WhatsApp, team / group) ---
+          TWILIO_FROM: ${{ secrets.TWILIO_FROM }}
+          TWILIO_TO: ${{ secrets.TWILIO_TO }}
+          TWILIO_ACCOUNT_SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
+          TWILIO_AUTH_TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN }}
+        run: python watcher.py
+
+      # GitHub disables scheduled workflows after 60 days without repo
+      # activity; re-enabling via the API resets that timer.
+      - name: Keep schedule alive
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/watch.yml/enable" || true
+
+      - name: Commit updated state
+        run: |
+          git config user.name "watch-bot"
+          git config user.email "actions@github.com"
+          if ! git diff --quiet -- seen.json; then
+            git add seen.json
+            git commit -m "Update seen items [skip ci]"
+            git push
+          else
+            echo "No state change to commit."
+          fi

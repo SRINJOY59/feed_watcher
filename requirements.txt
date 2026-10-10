@@ -1,0 +1,3 @@
+# No third-party packages needed — the watcher uses only the Python standard
+# library (urllib, json, hashlib). This file is here so the setup is obvious
+# and future backends can be added easily.
