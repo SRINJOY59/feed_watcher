@@ -6,8 +6,8 @@ Get an email the moment a new item shows up on a JSON endpoint.
 
 `watcher.py` polls the endpoint in `WATCH_URL`, compares the result against
 the items it has already seen (`seen.json`), and emails you about each new
-one. If nothing is new, nothing is sent. A GitHub Actions workflow checks
-every 60 seconds, 24/7, with no server to maintain.
+one. If nothing is new, nothing is sent. A GitHub Actions workflow runs it
+every few minutes, 24/7, with no server to maintain.
 
 ```
 poll WATCH_URL  ─▶  diff vs seen.json  ─▶  new item?  ─▶  email alert
@@ -48,8 +48,7 @@ In the repo: **Settings ▸ Secrets and variables ▸ Actions ▸ New repository
 
 Open the **Actions** tab and enable workflows if GitHub asks. To check the
 setup, click **Watch ▸ Run workflow**. The log should say
-`Fetched N item(s).` and `No new items.` every minute (no email, since
-nothing is new). The run stays "in progress" for hours; that's expected.
+`Fetched N item(s).` and `No new items.` (no email, since nothing is new).
 
 ---
 
@@ -71,9 +70,17 @@ and `CALLMEBOT_APIKEY`) or `twilio` (WhatsApp, needs `TWILIO_FROM`,
 
 ## Notes
 
-- GitHub's cron is unreliable (runs can be delayed for hours), so each run
-  polls in a loop for ~5h45m and the next queued run takes over after it.
-  Change the interval with `POLL_SECONDS` in the workflow.
+- GitHub's own cron is unreliable (runs can be delayed for hours), so runs
+  are started by an external scheduler calling the dispatch API:
+
+  ```
+  POST https://api.github.com/repos/<owner>/<repo>/actions/workflows/watch.yml/dispatches
+  Authorization: Bearer <fine-grained token, Actions: read & write>
+  Accept: application/vnd.github+json
+  Body: {"ref":"main"}
+  ```
+
+  The built-in 15-minute schedule is a backup.
 - The workflow re-enables itself each run, so GitHub's 60-day inactivity
   pause doesn't stop it.
 - No third-party Python packages are needed.
