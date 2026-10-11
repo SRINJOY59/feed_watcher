@@ -1,14 +1,15 @@
 name: Watch
 
-# Runs the watcher on a schedule. When a new item appears it sends an alert
-# and commits the updated seen.json back to the repo so it remembers.
-# When nothing is new, nothing is sent.
+# Each run polls every POLL_SECONDS for ~5h45m (jobs are capped at 6h).
+# GitHub's cron is unreliable (runs get delayed or dropped for hours), so the
+# schedule only has to start a run now and then: one run is always queued
+# behind the active one and takes over when it ends.
+# When a new item appears it sends an alert and commits seen.json back so it
+# remembers. When nothing is new, nothing is sent.
 
 on:
   schedule:
-    # Every 5 minutes. GitHub's smallest cron interval is 5 min, and under
-    # load it may run a little late — fine for this purpose.
-    - cron: "*/5 * * * *"
+    - cron: "*/30 * * * *"
   workflow_dispatch: {}   # lets you trigger a run by hand from the Actions tab
 
 # Allow the job to push the updated state file back, and to keep itself enabled.
@@ -23,6 +24,7 @@ concurrency:
 jobs:
   watch:
     runs-on: ubuntu-latest
+    timeout-minutes: 355
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -32,7 +34,14 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Run watcher
+      # GitHub disables scheduled workflows after 60 days without repo
+      # activity; re-enabling via the API resets that timer.
+      - name: Keep schedule alive
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/watch.yml/enable" || true
+
+      - name: Poll loop
         env:
           WATCH_URL: ${{ secrets.WATCH_URL }}
           WATCH_PAGE_URL: ${{ secrets.WATCH_PAGE_URL }}
@@ -53,24 +62,18 @@ jobs:
           TWILIO_TO: ${{ secrets.TWILIO_TO }}
           TWILIO_ACCOUNT_SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
           TWILIO_AUTH_TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN }}
-        run: python watcher.py
-
-      # GitHub disables scheduled workflows after 60 days without repo
-      # activity; re-enabling via the API resets that timer.
-      - name: Keep schedule alive
-        if: github.event_name == 'schedule'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/watch.yml/enable" || true
-
-      - name: Commit updated state
+          POLL_SECONDS: "60"
+          RUN_MINUTES: "345"
         run: |
           git config user.name "watch-bot"
           git config user.email "actions@github.com"
-          if ! git diff --quiet -- seen.json; then
-            git add seen.json
-            git commit -m "Update seen items [skip ci]"
-            git push
-          else
-            echo "No state change to commit."
-          fi
+          end=$(( $(date +%s) + RUN_MINUTES * 60 ))
+          while [ "$(date +%s)" -lt "$end" ]; do
+            python watcher.py || echo "::warning::watcher error, retrying next poll"
+            if ! git diff --quiet -- seen.json; then
+              git add seen.json
+              git commit -q -m "Update seen items [skip ci]"
+              git pull -q --rebase && git push -q || echo "::warning::push failed, will retry"
+            fi
+            sleep "$POLL_SECONDS"
+          done

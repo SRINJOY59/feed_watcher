@@ -6,8 +6,8 @@ Get an email the moment a new item shows up on a JSON endpoint.
 
 `watcher.py` polls the endpoint in `WATCH_URL`, compares the result against
 the items it has already seen (`seen.json`), and emails you about each new
-one. If nothing is new, nothing is sent. A GitHub Actions workflow runs it
-every 5 minutes, 24/7, with no server to maintain.
+one. If nothing is new, nothing is sent. A GitHub Actions workflow checks
+every 60 seconds, 24/7, with no server to maintain.
 
 ```
 poll WATCH_URL  ─▶  diff vs seen.json  ─▶  new item?  ─▶  email alert
@@ -48,7 +48,8 @@ In the repo: **Settings ▸ Secrets and variables ▸ Actions ▸ New repository
 
 Open the **Actions** tab and enable workflows if GitHub asks. To check the
 setup, click **Watch ▸ Run workflow**. The log should say
-`Fetched N item(s).` and `No new items.` (no email, since nothing is new).
+`Fetched N item(s).` and `No new items.` every minute (no email, since
+nothing is new). The run stays "in progress" for hours; that's expected.
 
 ---
 
@@ -70,7 +71,9 @@ and `CALLMEBOT_APIKEY`) or `twilio` (WhatsApp, needs `TWILIO_FROM`,
 
 ## Notes
 
-- GitHub may start scheduled runs a few minutes late under load.
+- GitHub's cron is unreliable (runs can be delayed for hours), so each run
+  polls in a loop for ~5h45m and the next queued run takes over after it.
+  Change the interval with `POLL_SECONDS` in the workflow.
 - The workflow re-enables itself each run, so GitHub's 60-day inactivity
   pause doesn't stop it.
 - No third-party Python packages are needed.
