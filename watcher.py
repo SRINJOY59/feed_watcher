@@ -103,7 +103,11 @@ def item_id(item):
         for key in ID_KEYS:
             if item.get(key) not in (None, ""):
                 return f"{key}:{item[key]}"
-        # fall back to a hash of the full content
+        # no id: use the title, so edits to other fields don't look "new"
+        for key in TITLE_KEYS:
+            if str(item.get(key) or "").strip():
+                return f"title:{str(item[key]).strip().lower()}"
+        # last resort: a hash of the full content
     return "hash:" + hashlib.sha256(
         json.dumps(item, sort_keys=True, ensure_ascii=False).encode("utf-8")
     ).hexdigest()[:16]
@@ -135,7 +139,9 @@ def load_seen():
         try:
             return set(json.loads(STATE_FILE.read_text()))
         except Exception:
-            return set()
+            # Unreadable state: treat like a first run (re-record, don't
+            # alert) rather than re-sending every item as "new".
+            print("::warning::seen.json unreadable, re-recording without alert")
     return None  # None == never run before
 
 

@@ -26,8 +26,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      # ref: main = latest state at start time. Without it a queued run checks
+      # out the commit from when it was triggered and could see an old
+      # seen.json, re-sending an alert.
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: main
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -64,7 +69,12 @@ jobs:
           if ! git diff --quiet -- seen.json; then
             git add seen.json
             git commit -m "Update seen items [skip ci]"
-            git pull -q --rebase && git push
+            # retry: a lost push means the next run would re-send the alert
+            for i in 1 2 3 4 5; do
+              git pull -q --rebase && git push && exit 0
+              sleep $((i * 5))
+            done
+            echo "::error::Could not save seen.json"; exit 1
           else
             echo "No state change to commit."
           fi
