@@ -57,6 +57,8 @@ DRY_RUN = os.environ.get("WATCH_DRY_RUN", "0") == "1"
 
 ID_KEYS = ("id", "_id", "slug", "uuid")
 TITLE_KEYS = ("title", "name", "heading")
+COMPANY_KEYS = ("company", "companyName", "company_name", "organization",
+                "organisation", "org", "sponsor", "client", "host")
 
 
 # --------------------------------------------------------------------------- #
@@ -97,20 +99,42 @@ def is_real_item(item):
 # --------------------------------------------------------------------------- #
 # Identity / display helpers (defensive about unknown JSON shape)
 # --------------------------------------------------------------------------- #
-def item_id(item):
-    """Stable identity for an item, so we don't re-alert on the same one."""
+def _text(val):
+    """String value of a field; nested objects like {"name": ...} included."""
+    if isinstance(val, dict):
+        val = next((val[k] for k in ("name", "title") if val.get(k)), "")
+    return str(val or "").strip()
+
+
+def _norm(s):
+    """Lowercase, punctuation-free, single-spaced, so trivial edits match."""
+    return " ".join("".join(c if c.isalnum() else " " for c in s.lower()).split())
+
+
+def item_company(item):
     if isinstance(item, dict):
+        for key in COMPANY_KEYS:
+            if _text(item.get(key)):
+                return _text(item[key])
+    return ""
+
+
+def item_keys(item):
+    """Every identity of an item. It counts as already seen if ANY matches,
+    so the same title + company is never re-sent, even under a new id."""
+    keys = set()
+    if isinstance(item, dict):
+        title = next((_text(item[k]) for k in TITLE_KEYS if _text(item.get(k))), "")
+        if title:
+            keys.add(f"tc:{_norm(title)}|{_norm(item_company(item))}")
         for key in ID_KEYS:
             if item.get(key) not in (None, ""):
-                return f"{key}:{item[key]}"
-        # no id: use the title, so edits to other fields don't look "new"
-        for key in TITLE_KEYS:
-            if str(item.get(key) or "").strip():
-                return f"title:{str(item[key]).strip().lower()}"
-        # last resort: a hash of the full content
-    return "hash:" + hashlib.sha256(
-        json.dumps(item, sort_keys=True, ensure_ascii=False).encode("utf-8")
-    ).hexdigest()[:16]
+                keys.add(f"{key}:{item[key]}")
+    if not keys:  # last resort: a hash of the full content
+        keys.add("hash:" + hashlib.sha256(
+            json.dumps(item, sort_keys=True, ensure_ascii=False).encode("utf-8")
+        ).hexdigest()[:16])
+    return keys
 
 
 def item_title(item):
@@ -156,8 +180,9 @@ def build_message(new_items):
     n = len(new_items)
     lines = [f"🔔 {n} new item{'s' if n != 1 else ''} posted!", ""]
     for it in new_items:
-        tag = item_tag(it)
-        lines.append(f"• {item_title(it)}" + (f" [{tag}]" if tag else ""))
+        company, tag = item_company(it), item_tag(it)
+        lines.append(f"• {item_title(it)}" + (f" — {company}" if company else "")
+                     + (f" [{tag}]" if tag else ""))
     if PAGE_URL:
         lines += ["", f"See all: {PAGE_URL}"]
     return "\n".join(lines)
@@ -249,19 +274,25 @@ def main():
         return
 
     print(f"Fetched {len(items)} item(s).")
-    current_ids = {item_id(it) for it in items}
     seen = load_seen()
 
     first_run = seen is None
     if first_run:
         seen = set()
 
-    new_items = [it for it in items if item_id(it) not in seen]
+    # New only if none of its keys were seen; keys are added as we go so the
+    # same title+company listed twice in one response alerts only once.
+    new_items, current_ids = [], set()
+    for it in items:
+        keys = item_keys(it)
+        if not keys & (seen | current_ids):
+            new_items.append(it)
+        current_ids |= keys
 
     if first_run and not NOTIFY_ON_FIRST_RUN:
         # Record everything as seen, don't alert.
         save_seen(current_ids)
-        print(f"First run: recorded {len(current_ids)} existing item(s) as seen, no alert sent.")
+        print(f"First run: recorded {len(items)} existing item(s) as seen, no alert sent.")
         return
 
     if new_items:
